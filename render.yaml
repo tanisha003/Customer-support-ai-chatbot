@@ -1,7 +1,6 @@
 # Render Blueprint — auto-discovered at the repo root.
 # Free-tier compatible: vector store rebuilds on each cold start (lives in /tmp).
-# After Render free tier removed persistent disks, we ingest at app startup
-# instead of at build time.
+# Embeddings via Jina AI hosted API (no PyTorch loaded — fits in 512 MB RAM).
 
 services:
   - type: web
@@ -19,6 +18,8 @@ services:
         value: llama-3.1-8b-instant
       - key: GROQ_API_KEY
         sync: false              # Set in Render dashboard — never commit.
+      - key: JINA_API_KEY
+        sync: false              # Free key from https://jina.ai/?sui=apikey
       - key: CHROMA_DIR
         value: /tmp/chroma_db
       - key: CHROMA_COLLECTION

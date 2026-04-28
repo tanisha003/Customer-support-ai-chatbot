@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.1-8b-instant"
 
+    # Embeddings — Jina AI hosted API (free tier; no local model loaded)
+    jina_api_key: str = ""
+
     # Vector store
     chroma_dir: str = "./chroma_db"
     chroma_collection: str = "support_kb"
@@ -48,7 +51,7 @@ class Settings(BaseSettings):
             return ["*"]
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
-    @field_validator("groq_api_key")
+    @field_validator("groq_api_key", "jina_api_key")
     @classmethod
     def _strip_key(cls, v: str) -> str:
         return v.strip()
