@@ -4,7 +4,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
@@ -24,6 +27,33 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
+def _ensure_vector_store() -> None:
+    """Build the vector store on startup if it doesn't exist.
+
+    Free-tier hosts (Render free, etc.) don't persist disk between restarts,
+    so we rebuild on every cold start. Takes ~30s the first time.
+    """
+    settings = get_settings()
+    chroma_path = Path(settings.chroma_dir)
+    if chroma_path.is_dir() and any(chroma_path.iterdir()):
+        logger.info("Vector store already present at %s", chroma_path)
+        return
+
+    logger.info("Vector store missing — running ingest.py to build it...")
+    backend_dir = Path(__file__).parent.parent
+    ingest_script = backend_dir / "ingest.py"
+    result = subprocess.run(
+        [sys.executable, str(ingest_script)],
+        cwd=str(backend_dir),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.error("ingest.py failed:\n%s\n%s", result.stdout, result.stderr)
+        raise RuntimeError("Failed to build vector store on startup")
+    logger.info("Vector store built successfully.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup / shutdown hooks."""
@@ -39,6 +69,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Top-K / threshold: %d / %.2f", settings.top_k, settings.similarity_threshold)
     logger.info("CORS origins:     %s", settings.cors_origins)
     logger.info("=" * 60)
+
+    # Build vector store if missing (free-tier hosts without persistent disk)
+    try:
+        _ensure_vector_store()
+    except Exception as exc:
+        logger.error("Could not prepare vector store: %s", exc)
+        # Don't crash the server — /health will return 503 with a clear message
+
     yield
     logger.info("Shutting down")
 

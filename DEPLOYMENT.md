@@ -7,7 +7,7 @@ The repo is already deployment-ready:
 - `frontend/vercel.json` — Vercel auto-detects it (Vite framework, SPA rewrites, security headers).
 - `backend/runtime.txt` and `backend/Procfile` — standard pin/start specs.
 
-Why this split: Vercel runs frontends beautifully but its backend functions are serverless and ephemeral, so they can't hold a persistent ChromaDB on disk. Render's free tier gives you a 1 GB persistent disk that stays warm with the FastAPI process. Best of both worlds at $0.
+> **About Render's free tier (Jan 2026 onward):** Render no longer provides persistent disks on the free plan. This project handles that automatically — the FastAPI app rebuilds the vector store in `/tmp` on each cold start. No upgrade needed. See "Cold start behaviour" at the bottom for what users will experience.
 
 ---
 
@@ -66,13 +66,17 @@ In the service → **Environment** tab:
 | `GROQ_API_KEY` | `gsk_…` (your key) |
 | `ALLOWED_ORIGINS` | `*` (you'll tighten this after the frontend deploys) |
 
-Render auto-redeploys on save. The first build takes 5–10 min (downloads embedding model weights, builds the vector store).
+Render auto-redeploys on save. The build itself takes ~3 min (just `pip install`). The first HTTP request after the build wakes the app and triggers vector-store ingest in `/tmp` — that takes another ~30s.
 
 ### C.4 Verify the backend
-- Open `https://rag-chatbot-api.onrender.com/health` → should return `{"status": "ok", "documents_indexed": 3}`
-- Open `https://rag-chatbot-api.onrender.com/sources` → lists your KB files
+- Open `https://rag-chatbot-api.onrender.com/health`
+- The first hit may return `503` for ~30 seconds while ingest runs. Wait, refresh, and you should see:
+  ```json
+  {"status":"ok","vector_store":"ready","documents_indexed":3}
+  ```
+- Open `https://rag-chatbot-api.onrender.com/sources` → lists your KB files.
 
-> **Free-tier gotcha:** Render free services sleep after 15 min idle. First request after sleep takes ~30s. Acceptable for a portfolio demo — mention it in your README.
+> **Free-tier cold starts:** Render free services sleep after 15 min idle. Each wake re-runs the in-memory ingest because `/tmp` resets — first request after a sleep takes ~30s. Subsequent requests are fast.
 
 Note your service URL — you'll paste it into Vercel next.
 
@@ -124,12 +128,31 @@ Render redeploys automatically. Your frontend can now talk to your backend, and 
 ## Phase F — Smoke test production
 
 Open your Vercel URL and confirm:
-- [ ] Tap each suggestion chip → cited answer appears within a few seconds
+- [ ] **Wait through the cold start.** First message after a long idle takes ~30–45s. Subsequent messages stream in real time.
+- [ ] Tap each suggestion chip → cited answer appears
 - [ ] Ask off-topic ("Who won the 2024 World Cup?") → fallback message
 - [ ] Empty input — submit button stays disabled
 - [ ] Mobile view — open on phone, layout responsive
 - [ ] Refresh — session resets cleanly
 - [ ] Browser DevTools → Network → POST `/chat` shows SSE `data:` events streaming
+
+---
+
+## Cold start behaviour (what your users will see)
+
+Render's free tier puts the service to sleep after 15 minutes of inactivity. When the next user arrives:
+
+1. **Container wake** (~5–10s) — Render starts the Python process
+2. **Vector store rebuild** (~25–35s) — `app/main.py` lifespan runs `ingest.py` because `/tmp` was wiped
+3. **First answer** — streams normally
+
+After that, **all subsequent requests are fast** (top-k retrieval + Groq inference, well under 3 seconds end-to-end) until the service idles again.
+
+For a portfolio demo this is fine — interviewers understand free-tier cold starts. Add this note to your README so visitors aren't confused:
+
+> *First message after inactivity may take ~30 seconds to wake up the free-tier backend. Subsequent messages stream in real time.*
+
+If you ever want to eliminate cold starts, upgrade Render to the **Starter plan ($7/mo)** — it stays warm 24/7 and you can re-add a persistent disk so ingest only runs on deploy.
 
 ---
 
@@ -141,7 +164,7 @@ git add backend/knowledge_base/
 git commit -m "docs: update FAQ"
 git push
 ```
-Render's build command re-runs `ingest.py`, so the vector store rebuilds on every deploy. Vercel doesn't need a redeploy unless you also touched the frontend.
+Render redeploys automatically. The next request triggers a fresh ingest with the new docs.
 
 ---
 
@@ -149,12 +172,13 @@ Render's build command re-runs `ingest.py`, so the vector store rebuilds on ever
 
 | Symptom | Fix |
 |---|---|
-| Render build OOM on `sentence-transformers` | Free tier is tight — wait and retry, or upgrade to $7 Starter |
-| `/health` returns 503 | Disk not mounted; run `python ingest.py` via Render Shell |
+| `disks are not supported for free tier services` | Already fixed in `render.yaml` — make sure your repo has the latest version (no `disk:` block) |
+| Render build OOM on `sentence-transformers` | Free tier RAM is tight — wait 5 min and retry. Almost always works on second attempt |
+| `/health` returns 503 for >2 min after deploy | Check service logs for ingest errors; restart via "Manual Deploy" → "Deploy latest commit" |
 | Vercel build can't find `package.json` | Root Directory not set to `frontend` — fix in Vercel project settings |
 | Browser CORS error | `ALLOWED_ORIGINS` on Render must match your Vercel URL exactly (incl. `https://`) |
 | `VITE_API_URL` undefined in production | Vercel env vars apply at build time — redeploy after adding |
-| First message takes 30s | Render free-tier cold start — expected |
+| First message takes 30s | Free-tier cold start with in-memory ingest — expected |
 | Groq returns 429 | Hit free-tier rate limit; wait or upgrade |
 
 ---
@@ -163,9 +187,9 @@ Render's build command re-runs `ingest.py`, so the vector store rebuilds on ever
 
 | Host | Backend free tier? | Notes |
 |---|---|---|
-| **Railway** | $5 credit/mo | Cleaner UX, Docker-native |
-| **Fly.io** | Generous free | Great for FastAPI, requires CLI |
-| **Hugging Face Spaces** | Free CPU | Self-contained option |
+| **Railway** | $5 credit/mo | Cleaner UX, Docker-native, persistent volumes available |
+| **Fly.io** | Generous free | Great for FastAPI, requires CLI, persistent volumes available |
+| **Hugging Face Spaces** | Free CPU | Self-contained option, persistent storage included |
 
 The included [`deploy/Dockerfile`](deploy/Dockerfile) works for any container host. The frontend stays on Vercel either way.
 
