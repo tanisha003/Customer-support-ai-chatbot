@@ -13,17 +13,6 @@
 
 ---
 
-## Architecture
-
-```mermaid
-flowchart LR
-    A[React Frontend<br/>Vite + Tailwind<br/>on Vercel] -->|POST /chat| B[FastAPI Backend<br/>on Render]
-    B -->|SSE stream| A
-    B -->|similarity search| C[(ChromaDB<br/>persistent disk)]
-    B -->|prompt + context| D[LLM<br/>Ollama / Groq]
-    D -->|tokens| B
-    E[knowledge_base/<br/>*.pdf, *.md, *.txt] -.ingest.py.-> C
-```
 
 ## Features
 
